@@ -258,6 +258,9 @@ int fork(void) {
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
+  // lab2: inherit the traceamsk of the parent process.
+  np->tracemask = p->tracemask;
+
   pid = np->pid;
 
   np->state = RUNNABLE;

@@ -81,3 +81,13 @@ uint64 sys_rename(void) {
   p->name[len] = '\0';
   return 0;
 }
+
+// lab2: set the tracemask of the calling proc.
+uint64 sys_trace(void) {
+  int mask;
+  if(argint(0, &mask) < 0)
+    return -1;
+
+  myproc()->tracemask = mask;
+  return 0;
+}

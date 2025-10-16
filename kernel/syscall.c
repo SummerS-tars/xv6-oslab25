@@ -7,6 +7,16 @@
 #include "syscall.h"
 #include "defs.h"
 
+// lab2: the name tables of the system calls.
+static const char *syscallnames[] = {
+  [SYS_fork] = "sys_fork",   [SYS_exit] = "sys_exit",     [SYS_wait] = "sys_wait",     [SYS_pipe] = "sys_pipe",
+  [SYS_read] = "sys_read",   [SYS_kill] = "sys_kill",     [SYS_exec] = "sys_exec",     [SYS_fstat] = "sys_fstat",
+  [SYS_chdir] = "sys_chdir", [SYS_dup] = "sys_dup",       [SYS_getpid] = "sys_getpid", [SYS_sbrk] = "sys_sbrk",
+  [SYS_sleep] = "sys_sleep", [SYS_uptime] = "sys_uptime", [SYS_open] = "sys_open",     [SYS_write] = "sys_write",
+  [SYS_mknod] = "sys_mknod", [SYS_unlink] = "sys_unlink", [SYS_link] = "sys_link",     [SYS_mkdir] = "sys_mkdir",
+  [SYS_close] = "sys_close", [SYS_rename] = "sys_rename", [SYS_trace] = "sys_trace",
+};
+
 // Fetch the uint64 at addr from the current process.
 int fetchaddr(uint64 addr, uint64 *ip) {
   struct proc *p = myproc();
@@ -89,6 +99,7 @@ extern uint64 sys_wait(void);
 extern uint64 sys_write(void);
 extern uint64 sys_uptime(void);
 extern uint64 sys_rename(void);
+extern uint64 sys_trace(void);
 
 static uint64 (*syscalls[])(void) = {
     [SYS_fork] = sys_fork,   [SYS_exit] = sys_exit,     [SYS_wait] = sys_wait,     [SYS_pipe] = sys_pipe,
@@ -96,7 +107,7 @@ static uint64 (*syscalls[])(void) = {
     [SYS_chdir] = sys_chdir, [SYS_dup] = sys_dup,       [SYS_getpid] = sys_getpid, [SYS_sbrk] = sys_sbrk,
     [SYS_sleep] = sys_sleep, [SYS_uptime] = sys_uptime, [SYS_open] = sys_open,     [SYS_write] = sys_write,
     [SYS_mknod] = sys_mknod, [SYS_unlink] = sys_unlink, [SYS_link] = sys_link,     [SYS_mkdir] = sys_mkdir,
-    [SYS_close] = sys_close,
+    [SYS_close] = sys_close, [SYS_rename] = sys_rename, [SYS_trace] = sys_trace,
 };
 
 void syscall(void) {
@@ -105,7 +116,19 @@ void syscall(void) {
 
   num = p->trapframe->a7;
   if (num > 0 && num < NELEM(syscalls) && syscalls[num]) {
+    // lab2: before perform the system call, fetch the first argument.
+    uint64 first_arg = argraw(0);
+
     p->trapframe->a0 = syscalls[num]();
+
+    // lab2: check tracemask and perform the trace printing.
+    if(p->tracemask & (1 << num)) {
+      printf("%d: %s(%d) -> %d\n",
+        p->pid, 
+        syscallnames[num], 
+        first_arg, 
+        p->trapframe->a0);
+    }
   } else {
     printf("%d %s: unknown sys call %d\n", p->pid, p->name, num);
     p->trapframe->a0 = -1;
