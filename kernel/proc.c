@@ -622,3 +622,19 @@ void procdump(void) {
     printf("\n");
   }
 }
+
+// lab2: statistics about unused processes.
+uint64 unused_proc_count(void) {
+  struct proc *p;
+  uint64 count = 0;
+  
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->state == UNUSED) {
+      count++;
+    }
+    release(&p->lock);
+  }
+
+  return count;
+}
