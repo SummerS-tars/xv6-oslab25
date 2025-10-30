@@ -160,6 +160,24 @@ uint64 sys_setnice(void) {
   // Optional: scale vruntime to preserve relative fairness across nice change
   // Avoid division by zero; old in [1..3]
   p->vruntime = (uint)((uint64)p->vruntime * (uint64)val / (uint64)old);
+  if (val < old) {
+    uint min_vr = (uint)~0;
+    int found = 0;
+    for (struct proc *q = proc; q < &proc[NPROC]; q++) {
+      if (q == p) continue;
+      enum procstate st = q->state;
+      if (st == RUNNABLE || st == RUNNING) {
+        uint v = q->vruntime;
+        if (!found || v < min_vr) {
+          min_vr = v;
+          found = 1;
+        }
+      }
+    }
+    if (found && p->vruntime < min_vr) {
+      p->vruntime = min_vr;
+    }
+  }
   release(&p->lock);
   return 0;
 }
