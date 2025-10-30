@@ -23,6 +23,39 @@ uint64 big_calculation() {
     return sum;
 }
 
+// static void write_line(const char *s) {
+//     write(1, s, strlen(s));
+// }
+
+static void print_pid_line(int pid, uint running_time, uint runnable_time, uint sleep_time) {
+    char buf[128];
+    char num[32];
+    int off = 0;
+
+    // PID: %d, Running Time: %d, Runnable Time: %d, Sleep Time: %d\n
+    const char *pfx1 = "PID: ";
+    const char *pfx2 = ", Running Time: ";
+    const char *pfx3 = ", Runnable Time: ";
+    const char *pfx4 = ", Sleep Time: ";
+
+    // PID
+    memcpy(buf + off, pfx1, strlen(pfx1)); off += strlen(pfx1);
+    itoa(pid, num); memcpy(buf + off, num, strlen(num)); off += strlen(num);
+    // Running Time
+    memcpy(buf + off, pfx2, strlen(pfx2)); off += strlen(pfx2);
+    itoa((int)running_time, num); memcpy(buf + off, num, strlen(num)); off += strlen(num);
+    // Runnable Time
+    memcpy(buf + off, pfx3, strlen(pfx3)); off += strlen(pfx3);
+    itoa((int)runnable_time, num); memcpy(buf + off, num, strlen(num)); off += strlen(num);
+    // Sleep Time
+    memcpy(buf + off, pfx4, strlen(pfx4)); off += strlen(pfx4);
+    itoa((int)sleep_time, num); memcpy(buf + off, num, strlen(num)); off += strlen(num);
+    // Newline
+    buf[off++] = '\n';
+
+    write(1, buf, off);
+}
+
 void loop() {
     int pid = getpid();
     uint last_running_time = 0, last_runnable_time = 0, last_sleep_time = 0;
@@ -45,7 +78,7 @@ void loop() {
 
         // 达到最大运行时间则退出
         if (running_time >= MAX_TIME) {
-            printf("PID: %d, Running Time: %d, Runnable Time: %d, Sleep Time: %d\n", pid, running_time, runnable_time, sleep_time);
+            print_pid_line(pid, running_time, runnable_time, sleep_time);
             exit(0);
         }
     }
@@ -103,7 +136,7 @@ int main(int argc, char *argv[]) {
             printf("Error: pstate failed for PID %d\n", pids[i]);
             exit(1);
         }
-        printf("PID: %d, Running Time: %d, Runnable Time: %d, Sleep Time: %d\n", pids[i], running_time, runnable_time, sleep_time);
+        print_pid_line(pids[i], running_time, runnable_time, sleep_time);
     }
 
     uint end_cpu_time[NCPU];
@@ -111,14 +144,41 @@ int main(int argc, char *argv[]) {
     // 获取结束时的CPU时间，与开始CPU时间作差获得该程序中CPU的运行时间
     cpustate(end_cpu_time);
     for (int i = 0; i < NCPU; ++i) {
-        printf("CPU %d: Running Time: %d\n", i, end_cpu_time[i] - start_cpu_time[i]);
+        {
+            char buf[64];
+            char num[32];
+            int off = 0;
+            const char *p1 = "CPU ";
+            const char *p2 = ": Running Time: ";
+            memcpy(buf + off, p1, strlen(p1)); off += strlen(p1);
+            itoa(i, num); memcpy(buf + off, num, strlen(num)); off += strlen(num);
+            memcpy(buf + off, p2, strlen(p2)); off += strlen(p2);
+            itoa((int)(end_cpu_time[i] - start_cpu_time[i]), num); memcpy(buf + off, num, strlen(num)); off += strlen(num);
+            buf[off++] = '\n';
+            write(1, buf, off);
+        }
         total_cpu_time += end_cpu_time[i] - start_cpu_time[i];
     }
-    printf("Total CPU Running Time: %d\n", total_cpu_time);
+    {
+        char buf[64];
+        char num[32];
+        int off = 0;
+        const char *p = "Total CPU Running Time: ";
+        memcpy(buf + off, p, strlen(p)); off += strlen(p);
+        itoa((int)total_cpu_time, num); memcpy(buf + off, num, strlen(num)); off += strlen(num);
+        buf[off++] = '\n';
+        write(1, buf, off);
+    }
 
     // stat.c的运行时间
     int end = uptime();
-    printf("Stat Time: %d\n", end - start);
+    {
+        char buf[64]; char num[32]; int off = 0; const char *p = "Stat Time: ";
+        memcpy(buf + off, p, strlen(p)); off += strlen(p);
+        itoa((int)(end - start), num); memcpy(buf + off, num, strlen(num)); off += strlen(num);
+        buf[off++] = '\n';
+        write(1, buf, off);
+    }
 
     exit(0);
 }
