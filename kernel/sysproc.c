@@ -112,7 +112,7 @@ uint64 sys_pstate(void) {
       enum procstate st = p->state;
       switch (st) {
         case RUNNING:
-          rtime += delta;
+          // running_time is counted per user-mode tick; don't add delta here
           break;
         case RUNNABLE:
           rutime += delta;
@@ -145,5 +145,21 @@ uint64 sys_cpustate(void) {
     if (copyout(myproc()->pagetable, u_base + i * sizeof(uint), (char *)&t, sizeof(uint)) < 0)
       return -1;
   }
+  return 0;
+}
+
+// Lab3 Task2: set current process nice value (1..3)
+uint64 sys_setnice(void) {
+  int val;
+  if (argint(0, &val) < 0) return -1;
+  if (val < 1 || val > 3) return -1;
+  struct proc *p = myproc();
+  acquire(&p->lock);
+  int old = p->nice;
+  p->nice = val;
+  // Optional: scale vruntime to preserve relative fairness across nice change
+  // Avoid division by zero; old in [1..3]
+  p->vruntime = (uint)((uint64)p->vruntime * (uint64)val / (uint64)old);
+  release(&p->lock);
   return 0;
 }

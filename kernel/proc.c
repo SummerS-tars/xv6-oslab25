@@ -20,6 +20,26 @@ static void wakeup1(struct proc *chan);
 static void freeproc(struct proc *p);
 void update_state(struct proc *p, enum procstate newstate);
 
+// Helper: find minimal vruntime among active (RUNNING/RUNNABLE) processes.
+// No locks are acquired to avoid lock-order issues; values may be slightly stale, which is acceptable for fairness.
+static uint min_active_vruntime(struct proc *skip, int *pfound) {
+  uint min_vr = (uint)~0;
+  int found = 0;
+  for (struct proc *q = proc; q < &proc[NPROC]; q++) {
+    if (q == skip) continue;
+    enum procstate st = q->state;
+    if (st == RUNNABLE || st == RUNNING) {
+      uint v = q->vruntime;
+      if (!found || v < min_vr) {
+        min_vr = v;
+        found = 1;
+      }
+    }
+  }
+  if (pfound) *pfound = found;
+  return found ? min_vr : 0;
+}
+
 extern char trampoline[];  // trampoline.S
 
 // initialize the proc table at boot time.
@@ -125,6 +145,10 @@ found:
   // Read ticks without taking tickslock to avoid lock inversion (minor inaccuracy acceptable)
   p->state_start_tick = ticks;
 
+  // priority scheduling defaults
+  p->nice = 3;        // default low priority
+  p->vruntime = 0;    // will be adjusted when entering RUNNABLE
+
   return p;
 }
 
@@ -214,6 +238,12 @@ void userinit(void) {
   p->cwd = namei("/");
 
   update_state(p, RUNNABLE);
+  // align new RUNNABLE to current min vruntime to avoid starving others
+  {
+    int found = 0;
+    uint mv = min_active_vruntime(p, &found);
+    if (found) p->vruntime = mv;
+  }
 
   release(&p->lock);
 }
@@ -274,6 +304,12 @@ int fork(void) {
   pid = np->pid;
 
   update_state(np, RUNNABLE);
+  // align child's vruntime to current runnable min
+  {
+    int found = 0;
+    uint mv = min_active_vruntime(np, &found);
+    if (found) np->vruntime = mv;
+  }
 
   release(&np->lock);
 
@@ -434,26 +470,35 @@ void scheduler(void) {
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
 
-    int found = 0;
-    for (p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
+    // 1) Lock-free scan to choose candidate with minimal vruntime
+    struct proc *cand = 0;
+    uint best_vr = (uint)~0;
+    // Use a CPU-dependent rotating start to reduce contention among CPUs
+    int start = (ticks + cpuid() * 7) % NPROC;
+    for (int i = 0; i < NPROC; i++) {
+      int j = start + i;
+      if (j >= NPROC) j -= NPROC;
+      p = &proc[j];
       if (p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        update_state(p, RUNNING);
-        c->proc = p;
-        swtch(&c->context, &p->context);
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-
-        found = 1;
+        uint vr = p->vruntime;
+        if (cand == 0 || vr < best_vr) {
+          cand = p;
+          best_vr = vr;
+        }
       }
-      release(&p->lock);
     }
-    if (found == 0) {
+
+    // 2) Try to run the candidate
+    if (cand) {
+      acquire(&cand->lock);
+      if (cand->state == RUNNABLE) {
+        update_state(cand, RUNNING);
+        c->proc = cand;
+        swtch(&c->context, &cand->context);
+        c->proc = 0;
+      }
+      release(&cand->lock);
+    } else {
       intr_on();
       asm volatile("wfi");
     }
@@ -486,6 +531,7 @@ void yield(void) {
   struct proc *p = myproc();
   acquire(&p->lock);
   update_state(p, RUNNABLE);
+  // On yielding, no vruntime change beyond update_state (RUNNING accounted)
   sched();
   release(&p->lock);
 }
@@ -550,6 +596,12 @@ void wakeup(void *chan) {
     acquire(&p->lock);
     if (p->state == SLEEPING && p->chan == chan) {
       update_state(p, RUNNABLE);
+      // align vruntime to avoid starving others
+      {
+        int found = 0;
+        uint mv = min_active_vruntime(p, &found);
+        if (found) p->vruntime = mv;
+      }
     }
     release(&p->lock);
   }
@@ -561,6 +613,12 @@ static void wakeup1(struct proc *p) {
   if (!holding(&p->lock)) panic("wakeup1");
   if (p->chan == p && p->state == SLEEPING) {
     update_state(p, RUNNABLE);
+    // align vruntime to avoid starving others
+    {
+      int found = 0;
+      uint mv = min_active_vruntime(p, &found);
+      if (found) p->vruntime = mv;
+    }
   }
 }
 
@@ -577,6 +635,12 @@ int kill(int pid) {
       if (p->state == SLEEPING) {
         // Wake process from sleep().
         update_state(p, RUNNABLE);
+        // align vruntime to current min to avoid burst of CPU
+        {
+          int found = 0;
+          uint mv = min_active_vruntime(p, &found);
+          if (found) p->vruntime = mv;
+        }
       }
       release(&p->lock);
       return 0;
@@ -642,7 +706,7 @@ void update_state(struct proc *p, enum procstate newstate) {
   uint delta = now - p->state_start_tick;
   switch (p->state) {
     case RUNNING:
-      p->running_time += delta;
+      // running_time & vruntime are accounted on timer interrupts in user mode
       break;
     case RUNNABLE:
       p->runnable_time += delta;

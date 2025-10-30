@@ -120,4 +120,8 @@ struct proc {
   uint runnable_time;  // total time in RUNNABLE state
   uint sleep_time;     // total time in SLEEPING state
   uint state_start_tick; // the tick when the current state started
+
+  // Lab3 Task2: priority scheduling
+  int  nice;           // priority factor: 1 (high) .. 3 (low); default 3
+  uint vruntime;       // virtual runtime ~ running_time * nice
 };

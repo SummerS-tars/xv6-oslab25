@@ -61,6 +61,12 @@ void usertrap(void) {
       if (p != 0) {
         struct cpu *c = mycpu();
         c->user_time++;
+        // Count per-process user running time and vruntime in user mode
+        // We intentionally only count on user-mode timer interrupts so that
+        // the sum of all processes' running_time matches summed CPU user_time.
+        // Avoid taking p->lock here to keep timer path lightweight; minor races are acceptable for stats.
+        p->running_time++;
+        p->vruntime += (uint)p->nice;
       }
     }
   } else {
@@ -138,7 +144,16 @@ void kerneltrap() {
   }
 
   // give up the CPU if this is a timer interrupt.
-  if (which_dev == 2 && myproc() != 0 && myproc()->state == RUNNING) yield();
+  if (which_dev == 2) {
+    struct proc *p = myproc();
+    if (p != 0 && p->state == RUNNING) {
+      struct cpu *c = mycpu();
+      c->user_time++;
+      p->running_time++;
+      p->vruntime += (uint)p->nice;
+      yield();
+    }
+  }
 
   // the yield() may have caused some traps to occur,
   // so restore trap registers for use by kernelvec.S's sepc instruction.
