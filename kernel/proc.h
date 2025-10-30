@@ -30,6 +30,8 @@ struct cpu {
   struct context context;     // swtch() here to enter scheduler().
   int noff;                   // Depth of push_off() nesting.
   int intena;                 // Were interrupts enabled before push_off()?
+  // Lab3: CPU running user-mode process time (in ticks)
+  uint user_time;
 };
 
 extern struct cpu cpus[NCPU];
@@ -112,4 +114,10 @@ struct proc {
 
   // add more here if needed, 
   // e.g. running time, ..., vruntime, nice ...
+
+  // Lab3: process state timers (in ticks)
+  uint running_time;   // total time in RUNNING state
+  uint runnable_time;  // total time in RUNNABLE state
+  uint sleep_time;     // total time in SLEEPING state
+  uint state_start_tick; // the tick when the current state started
 };

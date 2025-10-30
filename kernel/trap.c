@@ -55,6 +55,14 @@ void usertrap(void) {
     syscall();
   } else if ((which_dev = devintr()) != 0) {
     // ok
+    // count CPU time for user-mode process on timer interrupt
+    if (which_dev == 2) {
+      struct proc *p = myproc();
+      if (p != 0) {
+        struct cpu *c = mycpu();
+        c->user_time++;
+      }
+    }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
