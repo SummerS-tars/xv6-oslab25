@@ -379,3 +379,74 @@ int test_pagetable() {
   printf("test_pagetable: %d\n", satp != gsatp);
   return satp != gsatp;
 }
+
+// ---- Lab4: page table printing ----
+
+static void vmprintwalk(pagetable_t pagetable, int level, int vpn2, int vpn1);
+
+static void print_indent(int level) {
+  if (level <= 0) return;
+  // First level prints "||", deeper ones print "||   ||   ||"
+  printf("||");
+  for (int i = 1; i < level; i++) {
+    printf("   ||");
+  }
+}
+
+static void pte_flags_str(pte_t pte, char out[5]) {
+  // xv6 doesn't support %c, so build a short string
+  out[0] = (pte & PTE_R) ? 'r' : '-';
+  out[1] = (pte & PTE_W) ? 'w' : '-';
+  out[2] = (pte & PTE_X) ? 'x' : '-';
+  out[3] = (pte & PTE_U) ? 'u' : '-';
+  out[4] = '\0';
+}
+
+static uint64 compose_va(int level, int vpn2, int vpn1, int idx) {
+  // level: 1->L2, 2->L1, 3->L0
+  if (level == 1) {
+    // leaf at L2: 1GB page
+    return ((uint64)idx << 30);
+  } else if (level == 2) {
+    // leaf at L1: 2MB page
+    return ((uint64)vpn2 << 30) | ((uint64)idx << 21);
+  } else {
+    // level == 3, leaf at L0: 4KB page
+    return ((uint64)vpn2 << 30) | ((uint64)vpn1 << 21) | ((uint64)idx << 12);
+  }
+}
+
+static void vmprintwalk(pagetable_t pagetable, int level, int vpn2, int vpn1) {
+  for (int i = 0; i < 512; i++) {
+    pte_t pte = pagetable[i];
+    if ((pte & PTE_V) == 0) continue;  // only print valid entries
+
+    int isleaf = (pte & (PTE_R | PTE_W | PTE_X)) != 0;
+    char fstr[5];
+    pte_flags_str(pte, fstr);
+
+    print_indent(level);
+    printf("idx: %d: ", i);
+
+    if (isleaf) {
+      uint64 va = compose_va(level, vpn2, vpn1, i);
+      uint64 pa = PTE2PA(pte);
+      printf("va: %p -> pa: %p, flags: %s\n", va, pa, fstr);
+    } else {
+      uint64 child = PTE2PA(pte);
+      printf("pa: %p, flags: %s\n", child, fstr);
+      if (level < 3) {
+        if (level == 1) {
+          vmprintwalk((pagetable_t)child, level + 1, i, vpn1);
+        } else {
+          vmprintwalk((pagetable_t)child, level + 1, vpn2, i);
+        }
+      }
+    }
+  }
+}
+
+void vmprint(pagetable_t pagetable) {
+  printf("page table %p\n", pagetable);
+  vmprintwalk(pagetable, 1, -1, -1);
+}
