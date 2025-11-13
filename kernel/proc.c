@@ -20,6 +20,7 @@ static void wakeup1(struct proc *chan);
 static void freeproc(struct proc *p);
 
 extern char trampoline[];  // trampoline.S
+extern pagetable_t kernel_pagetable; // from vm.c
 
 // initialize the proc table at boot time.
 void procinit(void) {
@@ -37,6 +38,8 @@ void procinit(void) {
     uint64 va = KSTACK((int)(p - proc));
     kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
     p->kstack = va;
+    // record physical address of kernel stack for per-process kpt mapping
+    p->kstack_pa = (uint64)pa;
   }
   kvminithart();
 }
@@ -111,6 +114,32 @@ found:
     return 0;
   }
 
+  // Create an independent kernel page table for this process and map its kernel stack
+  p->k_pagetable = proc_kvminit();
+  if (p->k_pagetable == 0) {
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+  // Map this process's kernel stack into its kernel page table
+  if (mappages(p->k_pagetable, p->kstack, PGSIZE, p->kstack_pa, PTE_R | PTE_W) != 0) {
+    proc_freewalk(p->k_pagetable);
+    p->k_pagetable = 0; // avoid double free in freeproc
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+  // Map current user pages into kernel page table (clear PTE_U in mirrors)
+  if (p->sz > 0) {
+    if (kvm_map_user_pages(p->k_pagetable, p->pagetable, 0, p->sz) != 0) {
+      proc_freewalk(p->k_pagetable);
+      p->k_pagetable = 0; // avoid double free in freeproc
+      freeproc(p);
+      release(&p->lock);
+      return 0;
+    }
+  }
+
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -128,6 +157,10 @@ static void freeproc(struct proc *p) {
   p->trapframe = 0;
   if (p->pagetable) proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
+  if (p->k_pagetable) {
+    proc_freewalk(p->k_pagetable);
+  }
+  p->k_pagetable = 0;
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -203,6 +236,10 @@ void userinit(void) {
   p->state = RUNNABLE;
 
   release(&p->lock);
+
+  // Map this initial user process's pages into its kernel pagetable
+  if (p->sz > 0)
+    kvm_map_user_pages(p->k_pagetable, p->pagetable, 0, p->sz);
 }
 
 // Grow or shrink user memory by n bytes.
@@ -220,6 +257,14 @@ int growproc(int n) {
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
   p->sz = sz;
+  // keep kernel page table in sync: map newly added user pages or unmap removed ones
+  if (n > 0) {
+    // map the new region [old, new)
+    kvm_map_user_pages(p->k_pagetable, p->pagetable, sz - n, n);
+  } else if (n < 0) {
+    // unmap the removed region [new, old)
+    kvm_unmap_user_pages(p->k_pagetable, sz, -n);
+  }
   return 0;
 }
 
@@ -242,6 +287,9 @@ int fork(void) {
     return -1;
   }
   np->sz = p->sz;
+
+  // Mirror child's user mappings into its kernel page table
+  kvm_map_user_pages(np->k_pagetable, np->pagetable, 0, np->sz);
 
   np->parent = p;
 
@@ -430,11 +478,19 @@ void scheduler(void) {
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+        // switch kernel page table to the process's kernel pagetable
+        if (p->k_pagetable) {
+          w_satp(MAKE_SATP(p->k_pagetable));
+          sfence_vma();
+        }
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
+        // switch back to the global kernel page table
+        w_satp(MAKE_SATP(kernel_pagetable));
+        sfence_vma();
 
         found = 1;
       }
@@ -596,7 +652,7 @@ int either_copyout(int user_dst, uint64 dst, void *src, uint64 len) {
 int either_copyin(void *dst, int user_src, uint64 src, uint64 len) {
   struct proc *p = myproc();
   if (user_src) {
-    return copyin(p->pagetable, dst, src, len);
+    return copyin_new(p->pagetable, dst, src, len);
   } else {
     memmove(dst, (char *)src, len);
     return 0;

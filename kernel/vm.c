@@ -450,3 +450,92 @@ void vmprint(pagetable_t pagetable) {
   printf("page table %p\n", pagetable);
   vmprintwalk(pagetable, 1, -1, -1);
 }
+
+// ---- Lab4 Task 2: per-process kernel page tables ----
+
+// map into a specific kernel pagetable (helper)
+static void kvmmap_into(pagetable_t kpgtbl, uint64 va, uint64 pa, uint64 sz, int perm) {
+  if (mappages(kpgtbl, va, sz, pa, perm) != 0) panic("kvmmap_into");
+}
+
+// Create a kernel page table similar to kvminit() but do not touch the global one
+// and do not map CLINT (to avoid overlap in later tasks).
+pagetable_t proc_kvminit(void) {
+  pagetable_t kpgtbl = (pagetable_t)kalloc();
+  if (kpgtbl == 0) return 0;
+  memset(kpgtbl, 0, PGSIZE);
+
+  // uart registers
+  kvmmap_into(kpgtbl, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+  // virtio mmio disk interface
+  kvmmap_into(kpgtbl, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+  // PLIC
+  kvmmap_into(kpgtbl, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+  // map kernel text executable and read-only.
+  kvmmap_into(kpgtbl, KERNBASE, KERNBASE, (uint64)etext - KERNBASE, PTE_R | PTE_X);
+  // map kernel data and the physical RAM we'll make use of.
+  kvmmap_into(kpgtbl, (uint64)etext, (uint64)etext, PHYSTOP - (uint64)etext, PTE_R | PTE_W);
+  // map the trampoline
+  kvmmap_into(kpgtbl, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+
+  return kpgtbl;
+}
+
+// Free page-table pages recursively but DO NOT free leaf physical pages.
+// Similar to freewalk(), except it does not panic on leaves and does not
+// free leaf-mapped physical memory. It frees only the intermediate page tables
+// and the root 'kpgtbl' itself.
+void proc_freewalk(pagetable_t kpgtbl) {
+  for (int i = 0; i < 512; i++) {
+    pte_t pte = kpgtbl[i];
+    if ((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0) {
+      uint64 child = PTE2PA(pte);
+      proc_freewalk((pagetable_t)child);
+      kpgtbl[i] = 0;
+    } else {
+      // leaf or invalid: do nothing (keep physical memory intact)
+    }
+  }
+  kfree((void *)kpgtbl);
+}
+
+// Map user pages [start, start+sz) from user pagetable 'upgtbl' into
+// kernel pagetable 'kpgtbl' at the same virtual addresses, but clear PTE_U.
+// Returns 0 on success, -1 on failure.
+int kvm_map_user_pages(pagetable_t kpgtbl, pagetable_t upgtbl, uint64 start, uint64 sz) {
+  if (sz == 0) return 0;  // nothing to do
+  uint64 a = PGROUNDDOWN(start);
+  uint64 last = PGROUNDDOWN(start + sz - 1);
+  for (;; a += PGSIZE) {
+    pte_t *upte = walk(upgtbl, a, 0);
+    if (upte == 0) return -1;
+    if ((*upte & PTE_V) == 0) return -1;
+    if ((PTE_FLAGS(*upte) & (PTE_R | PTE_W | PTE_X)) == 0) return -1;  // must be leaf
+    uint64 pa = PTE2PA(*upte);
+    int flags = (PTE_FLAGS(*upte) & ~(PTE_U));
+
+    // If already mapped in kernel pagetable, remove first to avoid panic in mappages
+    pte_t *kpte = walk(kpgtbl, a, 0);
+    if (kpte && (*kpte & PTE_V)) {
+      // do not free the physical page
+      *kpte = 0;
+    }
+    if (mappages(kpgtbl, a, PGSIZE, pa, flags) != 0) return -1;
+    if (a == last) break;
+  }
+  return 0;
+}
+
+// Unmap user pages [start, start+sz) from kernel pagetable 'kpgtbl'.
+// Does not free physical memory. Safe if some pages aren't mapped.
+void kvm_unmap_user_pages(pagetable_t kpgtbl, uint64 start, uint64 sz) {
+  uint64 a = PGROUNDDOWN(start);
+  uint64 last = (sz == 0) ? a : PGROUNDDOWN(start + sz - 1);
+  for (;; a += PGSIZE) {
+    pte_t *kpte = walk(kpgtbl, a, 0);
+    if (kpte && (*kpte & PTE_V) && (PTE_FLAGS(*kpte) != PTE_V)) {
+      *kpte = 0;
+    }
+    if (a == last) break;
+  }
+}

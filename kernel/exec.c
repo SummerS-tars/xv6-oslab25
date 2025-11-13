@@ -97,6 +97,12 @@ int exec(char *path, char **argv) {
   p->trapframe->sp = sp;          // initial stack pointer
   proc_freepagetable(oldpagetable, oldsz);
 
+  // After replacing the user image, update kernel pagetable's user mappings
+  kvm_unmap_user_pages(p->k_pagetable, 0, oldsz);
+  if (kvm_map_user_pages(p->k_pagetable, p->pagetable, 0, p->sz) != 0) {
+    panic("exec: kvm_map_user_pages");
+  }
+
   // Lab4: print the first process's page table
   if (p->pid == 1) vmprint(p->pagetable);
 
