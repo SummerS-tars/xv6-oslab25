@@ -222,7 +222,8 @@ def make(*target):
     post_make()
 
 def show_command(cmd):
-    from pipes import quote
+    # Python 3.12+ removed the 'pipes' module; use shlex.quote instead
+    from shlex import quote
     print("\n$", " ".join(map(quote, cmd)))
 
 def maybe_unlink(*paths):
