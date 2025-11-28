@@ -222,7 +222,8 @@ def make(*target):
     post_make()
 
 def show_command(cmd):
-    from pipes import quote
+    # Use shlex.quote (available on all supported Python 3 versions).
+    from shlex import quote
     print("\n$", " ".join(map(quote, cmd)))
 
 def maybe_unlink(*paths):
